@@ -48,3 +48,8 @@ npm test
 ## License
 
 MIT
+
+## Support
+
+If this project is useful to you, you can support development here:
+https://buy.stripe.com/bJeeVe2te0U16Ln1yudMI00
