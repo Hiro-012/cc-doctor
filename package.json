@@ -1,13 +1,16 @@
 {
   "name": "cc-doctor",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Diagnostic CLI that scans a repo's Claude Code configuration (.claude/settings.json, hooks, .mcp.json, CLAUDE.md) for common misconfigurations and accidentally committed secrets.",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Hiro-012/claude-.git",
-    "directory": "hypotheses/cc-doctor"
+    "url": "git+https://github.com/Hiro-012/cc-doctor.git"
+  },
+  "homepage": "https://github.com/Hiro-012/cc-doctor#readme",
+  "bugs": {
+    "url": "https://github.com/Hiro-012/cc-doctor/issues"
   },
   "bin": {
     "cc-doctor": "bin/cli.js"
