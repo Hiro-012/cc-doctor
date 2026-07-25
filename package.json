@@ -1,0 +1,41 @@
+{
+  "name": "cc-doctor",
+  "version": "0.1.5",
+  "description": "Diagnostic CLI that scans a repo's Claude Code configuration (.claude/settings.json, hooks, .mcp.json, CLAUDE.md) for common misconfigurations and accidentally committed secrets.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hiro-012/claude-.git",
+    "directory": "hypotheses/cc-doctor"
+  },
+  "bin": {
+    "cc-doctor": "bin/cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "claude-code",
+    "claude",
+    "lint",
+    "diagnostics",
+    "mcp",
+    "config",
+    "security",
+    "secrets-scanner",
+    "settings",
+    "hooks"
+  ],
+  "author": "cc-doctor project",
+  "scripts": {
+    "test": "node --test",
+    "test:accuracy": "node --test test/accuracy.test.js"
+  }
+}
