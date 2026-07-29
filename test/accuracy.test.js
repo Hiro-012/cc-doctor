@@ -219,6 +219,36 @@ const CASES = [
     },
     detected: (f) => has(f, (x) => x.check === 'mcp-config' && x.severity === 'error'),
   },
+  {
+    id: 'P-mcp-header-bearer-token',
+    category: 'positive',
+    async setup(dir) {
+      await writeFile(
+        join(dir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            remote: { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer sk-abcdefghijklmnopqrstuvwx' } },
+          },
+        })
+      );
+    },
+    detected: (f) => has(f, (x) => x.check === 'mcp-config' && x.severity === 'error'),
+  },
+  {
+    id: 'P-mcp-header-api-key',
+    category: 'positive',
+    async setup(dir) {
+      await writeFile(
+        join(dir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            remote: { type: 'sse', url: 'https://example.com/sse', headers: { 'X-Api-Key': 'AKIAABCDEFGHIJKLMNOP' } },
+          },
+        })
+      );
+    },
+    detected: (f) => has(f, (x) => x.check === 'mcp-config' && x.severity === 'error'),
+  },
 
   // --- claude-md: positive ---
   {
@@ -382,6 +412,36 @@ const CASES = [
     clean: (f) => !has(f, (x) => x.check === 'mcp-config'),
   },
   {
+    id: 'N-mcp-header-env-reference',
+    category: 'negative',
+    async setup(dir) {
+      await writeFile(
+        join(dir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            remote: { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer ${MCP_TOKEN}' } },
+          },
+        })
+      );
+    },
+    clean: (f) => !has(f, (x) => x.check === 'mcp-config'),
+  },
+  {
+    id: 'N-mcp-header-placeholder',
+    category: 'negative',
+    async setup(dir) {
+      await writeFile(
+        join(dir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            remote: { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer your-token-here' } },
+          },
+        })
+      );
+    },
+    clean: (f) => !has(f, (x) => x.check === 'mcp-config'),
+  },
+  {
     id: 'N-settings-narrow-safe-rules',
     category: 'negative',
     async setup(dir) {
@@ -392,6 +452,18 @@ const CASES = [
       );
     },
     clean: (f) => !has(f, (x) => x.check === 'settings-permissions'),
+  },
+  {
+    id: 'P-settings-local-json-committed',
+    category: 'positive',
+    async setup(dir) {
+      await mkdir(join(dir, '.claude'), { recursive: true });
+      await writeFile(
+        join(dir, '.claude', 'settings.local.json'),
+        JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } })
+      );
+    },
+    detected: (f) => has(f, (x) => x.check === 'settings-permissions' && x.severity === 'warn'),
   },
   {
     id: 'N-settings-hook-script-exists',
@@ -406,6 +478,19 @@ const CASES = [
             PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '.claude/hooks/present.sh' }] }],
           },
         })
+      );
+    },
+    clean: (f) => !has(f, (x) => x.check === 'settings-permissions'),
+  },
+  {
+    id: 'N-settings-local-json-gitignored',
+    category: 'negative',
+    async setup(dir) {
+      await mkdir(join(dir, '.claude'), { recursive: true });
+      await writeFile(join(dir, '.gitignore'), '.claude/settings.local.json\n');
+      await writeFile(
+        join(dir, '.claude', 'settings.local.json'),
+        JSON.stringify({ permissions: { allow: ['Bash(npm test)'] } })
       );
     },
     clean: (f) => !has(f, (x) => x.check === 'settings-permissions'),

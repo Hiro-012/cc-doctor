@@ -117,6 +117,48 @@ test('does not flag env-var-reference secrets in .mcp.json', async () => {
   }
 });
 
+test('flags hardcoded bearer token in .mcp.json headers', async () => {
+  const dir = await makeTempRepo();
+  try {
+    await writeFile(
+      join(dir, '.mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          remote: { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer sk-abcdefghijklmnopqrstuvwx' } },
+        },
+      })
+    );
+    await gitAddAll(dir);
+    const report = await scan(dir);
+    assert.ok(
+      report.findings.some(
+        (f) => f.check === 'mcp-config' && f.severity === 'error' && /headers\.Authorization/.test(f.message)
+      )
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('does not flag env-var-reference secrets in .mcp.json headers', async () => {
+  const dir = await makeTempRepo();
+  try {
+    await writeFile(
+      join(dir, '.mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          remote: { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer ${MCP_TOKEN}' } },
+        },
+      })
+    );
+    await gitAddAll(dir);
+    const report = await scan(dir);
+    assert.ok(!report.findings.some((f) => f.check === 'mcp-config'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('flags committed AWS access key', async () => {
   const dir = await makeTempRepo();
   try {
