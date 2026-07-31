@@ -16,12 +16,12 @@ This is a linter, not a security guarantee — it catches common, specific mista
 
 ## Accuracy
 
-Measured against a 44-fixture corpus (`test/accuracy.test.js`, run via `npm test`) of known-vulnerable and known-clean repo configurations:
+Measured against a 49-fixture corpus (`test/accuracy.test.js`, run via `npm test`) of known-vulnerable and known-clean repo configurations:
 
-- **Recall: 96.4%** (27/28 known-bad fixtures detected)
-- **False positive rate: 0.0%** (0/16 known-clean fixtures wrongly flagged)
+- **Recall: 100.0%** (29/29 known-bad fixtures detected)
+- **False positive rate: 0.0%** (0/20 known-clean fixtures wrongly flagged)
 
-Known limitation: the generic `password = "..."` / `token = "..."` catch-all only matches values made up of `[a-zA-Z0-9_-/+=]`. Real secrets containing other punctuation (e.g. `!`) won't be caught by that specific pattern — the format-specific patterns (AWS, GitHub, Slack, Anthropic/OpenAI-style, private key blocks) are unaffected.
+The generic `password = "..."` / `token = "..."` catch-all matches any quoted, whitespace-free value of 20+ characters assigned to a secret-looking key, so secrets containing punctuation (e.g. `!`, `@`, `#`) are caught, not just `[a-zA-Z0-9_-/+=]` tokens. Obvious placeholders (`your-...`, `<...>`, `changeme`, `replace-with-...`, `${...}`, etc.), pure-punctuation dividers, and sanitized masks (values embedding `REDACTED`/`sanitized`, or zero-entropy single-character runs such as the nil UUID `00000000-0000-...`) are excluded to keep the false-positive rate at zero. This is a linter, not a security guarantee: values broken across lines, or those without a nearby `password`/`secret`/`token`/`api_key` key, are out of scope for the generic pattern — the format-specific patterns (AWS, GitHub, Slack, Anthropic/OpenAI-style, private key blocks) run independently.
 
 ## Usage
 

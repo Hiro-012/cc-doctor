@@ -331,15 +331,24 @@ const CASES = [
   {
     id: 'P-secrets-generic-assigned-password',
     category: 'positive',
-    // Known limitation: the generic-secret regex requires the quoted value to
-    // be made up entirely of [a-zA-Z0-9_-/+=]. Real passwords often contain
-    // other punctuation (e.g. "!"), which breaks the match. Tracked here
-    // rather than silently dropped so the recall number reflects it; not
-    // widened yet because loosening the char class risks new false positives
-    // (see the doc-example-placeholder negative fixture below).
-    knownLimitation: true,
+    // Previously a known limitation: the generic-secret regex used to require
+    // the quoted value to be made up entirely of [a-zA-Z0-9_-/+=], so real
+    // passwords containing punctuation (e.g. "!") escaped detection. The value
+    // class was widened to any run of non-whitespace, non-quote characters
+    // (still gated by the placeholder allowlist and an alphanumeric guard), so
+    // this now counts toward recall.
     async setup(dir) {
       await writeFile(join(dir, 'db.config'), 'password: "Sup3rSecretDbPassw0rd!!"\n');
+    },
+    detected: (f) => has(f, (x) => x.check === 'secrets-scan' && x.severity === 'error'),
+  },
+  {
+    id: 'P-secrets-generic-symbol-heavy-token',
+    category: 'positive',
+    // A secret dense with shell-punctuation, the kind the old [a-zA-Z0-9_-/+=]
+    // value class could not match at all.
+    async setup(dir) {
+      await writeFile(join(dir, 'app.conf'), 'api_key = "Xy9$k2!mNp4@qR7&wZ1#tuvw"\n');
     },
     detected: (f) => has(f, (x) => x.check === 'secrets-scan' && x.severity === 'error'),
   },
@@ -540,6 +549,48 @@ const CASES = [
         join(dir, 'README.md'),
         '# Config\n\nSet your key:\n\n```\napi_key = "REPLACE_WITH_YOUR_OWN_API_KEY_HERE"\n```\n'
       );
+    },
+    clean: (f) => !has(f, (x) => x.check === 'secrets-scan'),
+  },
+  {
+    id: 'N-secrets-punctuation-divider-not-a-secret',
+    category: 'negative',
+    // Widening the value class to non-whitespace must not make a pure-punctuation
+    // divider assigned to a secret-looking key fire (the alphanumeric guard).
+    async setup(dir) {
+      await writeFile(join(dir, 'divider.conf'), 'secret = "########################"\n');
+    },
+    clean: (f) => !has(f, (x) => x.check === 'secrets-scan'),
+  },
+  {
+    id: 'N-secrets-symbol-placeholder-still-skipped',
+    category: 'negative',
+    // A punctuation-containing value that is still an obvious placeholder must
+    // stay clean via the placeholder allowlist, even with the widened class.
+    async setup(dir) {
+      await writeFile(join(dir, 'sample.conf'), 'password = "<YOUR_DB_PASSWORD!!>"\n');
+    },
+    clean: (f) => !has(f, (x) => x.check === 'secrets-scan'),
+  },
+  {
+    id: 'N-secrets-redaction-word-mask',
+    category: 'negative',
+    // Sanitized examples commonly assign a masked value that embeds a redaction
+    // word (REDACTED / sanitized). The widened value class matches the token,
+    // but the mask filter must keep it clean — it is not a real committed secret.
+    async setup(dir) {
+      await writeFile(join(dir, 'example.conf'), 'token: "sk-REDACTED-DO-NOT-COMMIT-1234"\n');
+    },
+    clean: (f) => !has(f, (x) => x.check === 'secrets-scan'),
+  },
+  {
+    id: 'N-secrets-single-char-mask',
+    category: 'negative',
+    // The nil UUID and other single-character masks pass the alphanumeric guard
+    // (they contain "0"/"a"/etc.) but carry no entropy, so the mask filter must
+    // reject them rather than fire on an obvious placeholder.
+    async setup(dir) {
+      await writeFile(join(dir, 'ids.conf'), 'password: "00000000-0000-0000-0000-000000000000"\n');
     },
     clean: (f) => !has(f, (x) => x.check === 'secrets-scan'),
   },
