@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cc-doctor — Claude Code config &amp; secrets scanner</title>
+<meta name="description" content="cc-doctor is a free, open-source CLI that scans a repo's Claude Code configuration (.claude/settings.json, hooks, .mcp.json, CLAUDE.md) for dangerous misconfigurations and leaked secrets before they cause an incident.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
+  .tagline { color: #555; font-size: 1.05rem; margin-top: 0; }
+  pre { background: #f4f4f4; padding: 0.9rem 1rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .cta { display: inline-block; margin-top: 0.5rem; padding: 0.6rem 1.1rem; background: #1a1a1a; color: #fff; text-decoration: none; border-radius: 6px; }
+  .cta:hover { background: #333; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #e0e0e0; }
+  footer { margin-top: 3rem; color: #777; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>cc-doctor</h1>
+<p class="tagline">A Claude Code security &amp; config scanner. Free and open source.</p>
+
+<p>cc-doctor is a diagnostic CLI for repositories that use
+<a href="https://claude.com/claude-code">Claude Code</a>. It scans your
+project's Claude Code configuration — <code>.claude/settings.json</code>,
+hooks, <code>.mcp.json</code>, <code>CLAUDE.md</code> — and your git-tracked
+files, flagging unrestricted permission grants, hardcoded secrets, broken
+hook paths, and other common misconfigurations before they cause a security
+or usability problem.</p>
+
+<h2>Install</h2>
+<pre><code>npx cc-doctor</code></pre>
+<p>No account, no telemetry, runs entirely on your machine.</p>
+
+<h2>Free vs. Pro</h2>
+<table>
+  <tr><th>Free (today)</th><td>All checks: settings/permissions, MCP config secrets, CLAUDE.md hygiene, git-tracked secret scanning. MIT licensed, no limits.</td></tr>
+  <tr><th>Pro (planned)</th><td>Not yet available. Deeper checks (dependency vulnerability scanning, broader secret patterns, team Slack/webhook alerts) and a GitHub App mode are under consideration as a future paid tier — the current CLI stays free either way.</td></tr>
+</table>
+
+<p><a class="cta" href="https://github.com/Hiro-012/cc-doctor">View on GitHub →</a></p>
+
+<footer>
+  <p>By HiroCheck. MIT licensed. Also see <a href="https://www.npmjs.com/package/cc-doctor">cc-doctor on npm</a>.</p>
+</footer>
+</body>
+</html>
