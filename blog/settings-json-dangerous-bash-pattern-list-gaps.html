@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cc-doctor flags Bash(git push --force) in settings.json — not Bash(git push -f) or Bash(git reset --hard) — cc-doctor</title>
+<meta name="description" content="cc-doctor's settings-permissions check flags six specific shapes of risky Bash allow-rule in .claude/settings.json. git push -f (the short flag for --force), git reset --hard, and chmod -R 777 are just as destructive but aren't among the six — verified by running the check against each rule directly.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  .meta { color: #777; font-size: 0.9rem; margin-top: 0; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; }
+  pre { background: #f4f4f4; padding: 0.9rem 1rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .cta { display: inline-block; margin-top: 0.5rem; padding: 0.6rem 1.1rem; background: #1a1a1a; color: #fff; text-decoration: none; border-radius: 6px; }
+  .cta:hover { background: #333; }
+  footer { margin-top: 3rem; color: #777; font-size: 0.9rem; }
+  a { color: #1a1a1a; }
+</style>
+</head>
+<body>
+<h1>cc-doctor flags <code>Bash(git push --force)</code> in settings.json — not <code>Bash(git push -f)</code> or <code>Bash(git reset --hard)</code></h1>
+<p class="meta">By HiroCheck · Published 2026-08-30</p>
+
+<p>Claude Code's own permission engine is careful about what an allow rule
+actually authorizes at runtime: per its documentation, it's aware of
+shell operators, splitting a command on <code>&amp;&amp;</code>,
+<code>||</code>, <code>;</code>, <code>|</code>, <code>|&amp;</code>,
+<code>&amp;</code>, and newlines, and requiring each resulting
+subcommand to match a rule independently — a rule like
+<code>Bash(safe-cmd *)</code> doesn't authorize
+<code>safe-cmd &amp;&amp; other-cmd</code>. It also strips known wrapper
+commands (<code>timeout</code>, <code>time</code>, <code>nice</code>,
+<code>nohup</code>, <code>stdbuf</code>) and safe environment-variable
+prefixes before matching, so a rule written for the inner command still
+applies once those are peeled away. That's a real command parser doing
+real work.</p>
+
+<p>cc-doctor's <code>settings-permissions</code> check is a much
+smaller thing, and doesn't try to be that parser. It reads a committed
+<code>.claude/settings.json</code> or <code>settings.local.json</code>,
+takes each string in <code>permissions.allow</code>, and tests it
+against six fixed regular expressions. If none match, the rule passes
+silently — regardless of what the rule would actually let Claude Code
+run.</p>
+
+<h2>The six patterns</h2>
+
+<p>From <code>lib/checks/settings-permissions.js</code>, verbatim:</p>
+
+<pre><code>/^Bash\(\*\)$/
+/^Bash\(rm\s+-rf/
+/^Bash\(git\s+push\s+--force/
+/^Bash\(sudo(\s|\))/
+/^Bash\(curl.*\|\s*sh\)/
+/^Bash\(.*--dangerously-skip-permissions/</code></pre>
+
+<p>Plus a separate check that flags <code>Bash(*)</code> specifically
+when the same file has zero <code>deny</code> rules. That's the entire
+list cc-doctor's README describes as "other high-risk allowlisted
+command patterns" — six shapes, matched as plain substrings against the
+rule's own text.</p>
+
+<h2>Three rules that don't match, verified directly</h2>
+
+<p>Rather than argue about the six-pattern list in the abstract, we ran
+<code>checkSettingsPermissions()</code> against a
+<code>.claude/settings.json</code> whose <code>permissions.allow</code>
+contained five rules — three constructed as near-misses, plus a working
+positive control and a working negative control to confirm the check
+was actually running:</p>
+
+<pre><code>"Bash(git push -f origin main)",
+"Bash(git push --force-with-lease origin main)",   // control: matches
+"Bash(git reset --hard origin/main)",
+"Bash(chmod -R 777 /)",
+"Bash(rm -rf /)"                                   // control: matches</code></pre>
+
+<p>Output — only the two controls produced a finding:</p>
+
+<pre><code>[
+  ".claude/settings.json allows a high-risk command pattern: \"Bash(git push --force-with-lease origin main)\"",
+  ".claude/settings.json allows a high-risk command pattern: \"Bash(rm -rf /)\""
+]</code></pre>
+
+<p>The other three passed with no warning at all:</p>
+
+<ul>
+<li><strong><code>git push -f</code></strong> — the short flag for
+<code>--force</code>, same operation, same risk (overwriting remote
+history other people may have already pulled). The regex requires the
+literal substring <code>--force</code> immediately after
+<code>push</code>, so the one-letter alias it's short for isn't
+recognized. (<code>--force-with-lease</code>, by contrast, does match —
+it happens to start with the same eight characters the regex looks
+for, which is what makes the <code>-f</code> gap visible: two rules
+naming the same underlying git flag, one flagged and one not, purely
+because of how each one spells it.)</li>
+<li><strong><code>git reset --hard</code></strong> — discards
+uncommitted changes and moves the branch pointer, unrecoverable the
+same way <code>rm -rf</code> or a force-push is. There's no pattern for
+it; the list's only git-specific entry is the force-push one.</li>
+<li><strong><code>chmod -R 777</code></strong> — recursively makes a
+directory tree world-writable. Not represented by any of the six
+shapes.</li>
+</ul>
+
+<h2>Why this isn't really about finding more patterns to add</h2>
+
+<p>Each of these three could be patched into the list with one more
+regex — and probably should be, they're common enough. But the shape of
+the problem doesn't go away: a fixed list of literal command shapes is
+enumerating an open set. <code>git branch -D</code>,
+<code>docker system prune -af</code>,
+<code>find / -delete</code>, and any destructive command a project's
+own tooling happens to wrap in a differently-named script are all
+outside the six patterns today, and adding today's three doesn't close
+that gap for tomorrow's fourth. That's a different failure mode from
+cc-doctor's other checks — the secrets-scan check's five-pattern set
+is also finite, but it's matched against file <em>content</em> the
+scanner doesn't control; here the six patterns are trying to
+enumerate every dangerous <em>allow rule someone might write</em>, a
+much larger and less bounded space. Nothing in this check inspects
+what a rule would actually let Claude Code execute, the way Claude
+Code's own runtime matcher does — it's purely a lexical check for
+whether a handful of known-bad shapes appear in the rule text.</p>
+
+<h2>What cc-doctor checks</h2>
+
+<p><a href="https://www.npmjs.com/package/cc-doctor">cc-doctor</a> is a
+free CLI that scans a repo's git-tracked files for hardcoded secrets,
+plus Claude Code-specific misconfigurations: an unscoped
+<code>Bash(*)</code> permission grant, a committed
+<code>settings.local.json</code>, hooks pointing at scripts that no
+longer exist, and hardcoded credentials in <code>.mcp.json</code>. It
+runs entirely against the local filesystem and git index — no network
+access, no API key required.</p>
+
+<pre><code>npx cc-doctor            # scan the current directory
+npx cc-doctor path/to/repo</code></pre>
+
+<p>Measured against cc-doctor's 49-fixture accuracy corpus, the tool's
+recall is 100% (29/29 known-bad fixtures) with a 0% false-positive rate
+(0/20 known-clean fixtures) — full methodology in the
+<a href="../cc-doctor.html">project README</a>. That corpus targets the
+secrets-scan check; the settings-permissions gap described here doesn't
+change those numbers, since none of the three rules above triggered a
+false negative against an existing fixture — they simply aren't part
+of the corpus.</p>
+
+<p><a class="cta" href="../cc-doctor.html">cc-doctor — install &amp; docs →</a></p>
+
+<footer>
+  <p>By HiroCheck. cc-doctor is MIT licensed. See also
+  <a href="https://github.com/Hiro-012/cc-doctor">cc-doctor on GitHub</a>
+  and <a href="./index.html">more posts</a>. Source:
+  <a href="https://code.claude.com/docs/en/permissions">Claude Code permissions documentation</a>
+  (shell-operator splitting, wrapper-command stripping, and env-assignment
+  stripping behavior).</p>
+</footer>
+</body>
+</html>

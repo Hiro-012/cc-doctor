@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A Claude Code hook with a mistyped script path doesn't block anything — it fails open, silently — cc-doctor</title>
+<meta name="description" content="Claude Code's own docs say a hook command that can't start (missing or non-executable script) fails open: the tool call proceeds, and the error goes to the debug log only, never the transcript. cc-doctor's settings-permissions check catches this by testing the referenced path exists — verified by reproducing the exact failure and running the check against it.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  .meta { color: #777; font-size: 0.9rem; margin-top: 0; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; }
+  pre { background: #f4f4f4; padding: 0.9rem 1rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .cta { display: inline-block; margin-top: 0.5rem; padding: 0.6rem 1.1rem; background: #1a1a1a; color: #fff; text-decoration: none; border-radius: 6px; }
+  .cta:hover { background: #333; }
+  footer { margin-top: 3rem; color: #777; font-size: 0.9rem; }
+  a { color: #1a1a1a; }
+</style>
+</head>
+<body>
+<h1>A Claude Code hook with a mistyped script path doesn't block anything — it fails open, silently</h1>
+<p class="meta">By HiroCheck · Published 2026-09-04</p>
+
+<p>A team adds a <code>PreToolUse</code> hook to <code>.claude/settings.json</code>
+to block dangerous Bash commands before Claude Code runs them —
+a guard script under <code>.claude/hooks/</code>. The script gets
+renamed during a refactor, or the <code>hooks/</code> directory is
+accidentally left out of a commit, or the path is just typed wrong.
+The settings.json entry still parses as valid JSON and Claude Code
+never complains at startup. Every future session runs as if the hook
+were never configured at all, and nothing in the normal transcript
+says so.</p>
+
+<h2>What Claude Code's own docs say happens</h2>
+
+<p>Per Claude Code's hooks documentation, when a hook command
+can't even start — because the script path doesn't exist or isn't
+executable — the shell exits with a code like 127, and for most hook
+events <strong>the action proceeds anyway</strong>. That's "fail
+open" by design, not a bug: exit code 2 is the only code that blocks
+an action through the code alone, and a hook that never runs can't
+produce exit code 2. The interpreter's error
+(<code>/bin/sh: /path/to/hook.sh: No such file or directory</code>)
+is reported as a non-blocking notice, and stderr from a hook run
+this way is written to the debug log only — never the transcript,
+and Claude never sees it. The documentation names this exact failure
+mode directly: <em>"a mistyped path in settings.json leaves the gate
+silently disabled."</em></p>
+
+<p>In other words, a broken hook path isn't a loud failure a reviewer
+would notice — it's a silent no-op. The permission gate a team
+believes is enforcing policy is, in this state, enforcing nothing.</p>
+
+<h2>Reproducing it</h2>
+
+<p>A minimal repo with a <code>PreToolUse</code> hook pointing at a
+script that was never committed:</p>
+
+<pre><code>{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/block-dangerous-bash.sh" }
+        ]
+      }
+    ]
+  }
+}</code></pre>
+
+<p><code>.claude/hooks/</code> doesn't exist in this repo at all — only
+<code>.claude/settings.json</code> is tracked. Running
+<code>checkSettingsPermissions()</code> (cc-doctor's
+<code>lib/checks/settings-permissions.js</code>) against it:</p>
+
+<pre><code>[WARN] [warn] settings-permissions: .claude/settings.json hook for
+"PreToolUse" references a script that does not exist:
+.claude/hooks/block-dangerous-bash.sh (.claude/settings.json)</code></pre>
+
+<p>The check walks every hook event in <code>settings.json</code>
+and <code>settings.local.json</code>, extracts the leading script
+path from each <code>command</code>-type hook's command string
+(matching a <code>.sh</code>/<code>.js</code>/<code>.py</code>/<code>.mjs</code>/<code>.cjs</code>
+suffix), resolves it relative to the repo root, and confirms the
+file is actually there with <code>existsSync</code>. It doesn't
+try to determine whether the script is executable, whether it
+exits 0 or 2, or whether the matcher would ever fire for a given
+tool call — only whether the path Claude Code would try to run
+exists on disk at all. That's a narrower question than "does this
+hook work," but it's exactly the failure mode the documentation
+calls out by name: a path that's wrong.</p>
+
+<h2>Why this check is easy to miss the value of</h2>
+
+<p>Every other cc-doctor check in <code>settings-permissions.js</code>
+looks for something present that shouldn't be — an unscoped
+<code>Bash(*)</code> grant, a dangerous allow-rule pattern, a
+committed <code>settings.local.json</code>. This is the one check in
+the file that looks for something <em>absent</em> that a team
+believes is present: a script the settings file claims exists,
+guarding a tool call, that in fact does nothing. A missing guard
+script produces no error at commit time, no error at Claude Code
+startup, and — per the documentation above — no error in the normal
+transcript either. The gap between "the policy is configured" and
+"the policy is enforced" is invisible unless something specifically
+checks the referenced path against the filesystem.</p>
+
+<h2>What cc-doctor checks</h2>
+
+<p><a href="https://www.npmjs.com/package/cc-doctor">cc-doctor</a> is a
+free CLI that scans a repo's git-tracked files for hardcoded secrets,
+plus Claude Code-specific misconfigurations: an unscoped
+<code>Bash(*)</code> permission grant, a committed
+<code>settings.local.json</code>, hooks pointing at scripts that no
+longer exist, and hardcoded credentials in <code>.mcp.json</code>. It
+runs entirely against the local filesystem and git index — no network
+access, no API key required.</p>
+
+<pre><code>npx cc-doctor            # scan the current directory
+npx cc-doctor path/to/repo</code></pre>
+
+<p>Measured against cc-doctor's 49-fixture accuracy corpus, the tool's
+recall is 100% (29/29 known-bad fixtures) with a 0% false-positive rate
+(0/20 known-clean fixtures) — full methodology in the
+<a href="../cc-doctor.html">project README</a>. The missing-hook-script
+scenario above (<code>P-settings-missing-hook-script</code>) and its
+negative control (<code>N-settings-hook-script-exists</code>, a hook
+pointing at a script that does exist) are both already part of that
+corpus.</p>
+
+<p><a class="cta" href="../cc-doctor.html">cc-doctor — install &amp; docs →</a></p>
+
+<footer>
+  <p>By HiroCheck. cc-doctor is MIT licensed. See also
+  <a href="https://github.com/Hiro-012/cc-doctor">cc-doctor on GitHub</a>
+  and <a href="./index.html">more posts</a>. Source:
+  <a href="https://code.claude.com/docs/en/hooks">Claude Code hooks documentation</a>
+  (exit-code semantics, fail-open behavior for hooks that can't start,
+  and debug-log-only stderr routing).</p>
+</footer>
+</body>
+</html>

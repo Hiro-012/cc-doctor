@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cc-doctor has two checks for Bash(*) in settings.json — one of them can never fire on its own</title>
+<meta name="description" content="settings-permissions.js flags an unscoped Bash(*) allow rule twice: once unconditionally, once only when deny is empty. The second condition is a strict subset of the first, so it can never produce a finding the first one hasn't already produced for the same rule — verified by tracing both conditions and reproducing all three deny-list states.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  .meta { color: #777; font-size: 0.9rem; margin-top: 0; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; }
+  pre { background: #f4f4f4; padding: 0.9rem 1rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .cta { display: inline-block; margin-top: 0.5rem; padding: 0.6rem 1.1rem; background: #1a1a1a; color: #fff; text-decoration: none; border-radius: 6px; }
+  .cta:hover { background: #333; }
+  footer { margin-top: 3rem; color: #777; font-size: 0.9rem; }
+  a { color: #1a1a1a; }
+</style>
+</head>
+<body>
+<h1>cc-doctor has two checks for <code>Bash(*)</code> in settings.json — one of them can never fire on its own</h1>
+<p class="meta">By HiroCheck · Published 2026-09-06</p>
+
+<p><code>lib/checks/settings-permissions.js</code> contains two separate
+pieces of logic that both react to an unscoped <code>Bash(*)</code>
+allow rule in <code>.claude/settings.json</code>. Tracing their
+conditions shows one is a strict subset of the other: every input that
+trips the narrower check has already tripped the broader one, so the
+narrower check has no state in which it can report something the
+broader one hasn't already reported for the same rule.</p>
+
+<h2>The two conditions, side by side</h2>
+
+<pre><code>const DANGEROUS_BASH_PATTERNS = [
+  /^Bash\(\*\)$/,               // ← check A, one of six patterns
+  /^Bash\(rm\s+-rf/,
+  /^Bash\(git\s+push\s+--force/,
+  /^Bash\(sudo(\s|\))/,
+  /^Bash\(curl.*\|\s*sh\)/,
+  /^Bash\(.*--dangerously-skip-permissions/,
+];
+
+for (const rule of allow) {
+  for (const pattern of DANGEROUS_BASH_PATTERNS) {
+    if (pattern.test(rule)) report.error(...);      // fires on rule alone
+  }
+}
+
+if (allow.includes('Bash(*)') && deny.length === 0) {  // ← check B
+  report.error(...);                                    // fires on rule + empty deny
+}</code></pre>
+
+<p>Check A fires the instant <code>'Bash(*)'</code> appears anywhere in
+<code>allow</code> — it doesn't look at <code>deny</code> at all. Check
+B fires only when that same exact string is present <em>and</em>
+<code>deny</code> is empty. Both conditions require the identical
+substring test on the identical array element; check B just adds one
+more requirement on top. That means check B's trigger condition is
+never true unless check A's trigger condition is also true, for the
+same rule, in the same run.</p>
+
+<h2>Reproducing all three states</h2>
+
+<p>Running <code>checkSettingsPermissions()</code> against three
+otherwise-identical <code>.claude/settings.json</code> files that vary
+only the <code>deny</code> array:</p>
+
+<pre><code>// deny: [] (empty)
+{ "permissions": { "allow": ["Bash(*)"], "deny": [] } }
+→ [
+    "allows a high-risk command pattern: \"Bash(*)\"",           // check A
+    "grants unrestricted Bash access (\"Bash(*)\") with no deny rules."  // check B
+  ]
+
+// deny: ["Bash(rm -rf /)"]  (one narrow, unrelated rule)
+{ "permissions": { "allow": ["Bash(*)"], "deny": ["Bash(rm -rf /)"] } }
+→ [ "allows a high-risk command pattern: \"Bash(*)\"" ]          // check A only
+
+// no Bash(*) at all
+{ "permissions": { "allow": ["Bash(git commit *)"], "deny": [] } }
+→ []                                                              // neither</code></pre>
+
+<p>The middle case is the one that matters: adding a single deny rule —
+any deny rule, whether or not it has anything to do with what
+<code>Bash(*)</code> actually exposes — silences check B's message
+entirely. It does not silence check A's, and check A's message
+("allows a high-risk command pattern") already says everything check
+B's more specific wording ("no deny rules") would have added. A repo
+with <code>Bash(*)</code> and one irrelevant deny rule reports exactly
+one error either way it's configured, worded identically to the
+zero-deny case. Nothing is lost; check B's own condition on
+<code>deny</code> just never gets the chance to be the reason
+something was flagged.</p>
+
+<h2>Why the accuracy corpus never caught this</h2>
+
+<p>cc-doctor's own test corpus has a fixture built specifically to
+confirm a rule survives a deny list:
+<code>P-settings-bash-star-with-deny</code>
+(<code>allow: ['Bash(*)'], deny: ['Bash(rm -rf /)']</code>), asserting
+the case is still flagged. It is — via check A. But the assertion is
+<code>has(f, x => x.check === 'settings-permissions' && x.severity ===
+'error')</code>: any error from the check module counts as a pass, not
+a specific message. Since check A alone already satisfies that
+assertion, the fixture can't distinguish "check B contributed a
+finding" from "check B did nothing and check A carried the whole
+result," which is exactly what happens. Recall on this fixture has
+always been, and will always be, 100% regardless of whether check B's
+code exists at all — the corpus measures whether <em>a</em> finding
+came back, not which line produced it.</p>
+
+<h2>Why "just add a deny rule" wasn't the fix anyway</h2>
+
+<p>Claude Code's own permissions documentation is explicit that
+rules are evaluated in a fixed order — deny, then ask, then allow —
+and that "a deny rule can't carry allowlist exceptions": a broad
+allow like <code>Bash(*)</code> stays in effect for every command
+except the ones a deny rule specifically names. One narrow deny entry
+doesn't shrink what <code>Bash(*)</code> permits elsewhere by even one
+command; it only carves out the exact thing it names. The
+documentation separately warns that Bash rules trying to constrain
+arguments are "fragile" — its own example is a
+<code>curl http://github.com/*</code> rule that a differently-ordered
+flag, a redirect, or a variable substitution slips past — so even a
+deny rule aimed at a real risk isn't a guarantee the way its author
+might assume. Check B's silence condition (deny is non-empty) was
+never actually verifying that the added protection meant anything; it
+was only checking that the array wasn't literally empty.</p>
+
+<h2>What cc-doctor checks</h2>
+
+<p><a href="https://www.npmjs.com/package/cc-doctor">cc-doctor</a> is a
+free CLI that scans a repo's git-tracked files for hardcoded secrets,
+plus Claude Code-specific misconfigurations: an unscoped
+<code>Bash(*)</code> permission grant, a committed
+<code>settings.local.json</code>, hooks pointing at scripts that no
+longer exist, and hardcoded credentials in <code>.mcp.json</code>. It
+runs entirely against the local filesystem and git index — no network
+access, no API key required.</p>
+
+<pre><code>npx cc-doctor            # scan the current directory
+npx cc-doctor path/to/repo</code></pre>
+
+<p>Measured against cc-doctor's 49-fixture accuracy corpus, the tool's
+recall is 100% (29/29 known-bad fixtures) with a 0% false-positive rate
+(0/20 known-clean fixtures) — full methodology in the
+<a href="../cc-doctor.html">project README</a>. Nothing above changes
+those numbers: every fixture that exercises check B also exercises
+check A on the same rule, so removing check B entirely — which this
+session has not done, only measured — would not lower recall on the
+existing corpus by a single fixture.</p>
+
+<p><a class="cta" href="../cc-doctor.html">cc-doctor — install &amp; docs →</a></p>
+
+<footer>
+  <p>By HiroCheck. cc-doctor is MIT licensed. See also
+  <a href="https://github.com/Hiro-012/cc-doctor">cc-doctor on GitHub</a>
+  and <a href="./index.html">more posts</a>. Source:
+  <a href="https://code.claude.com/docs/en/permissions">Claude Code permissions documentation</a>
+  (rule evaluation order — deny, then ask, then allow — and the
+  documented fragility of Bash rules that try to constrain arguments).</p>
+</footer>
+</body>
+</html>

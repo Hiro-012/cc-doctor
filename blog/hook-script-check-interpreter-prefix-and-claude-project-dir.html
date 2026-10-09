@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cc-doctor's hook-script check: silent on "python3 foo.py", false alarm on Claude Code's own $CLAUDE_PROJECT_DIR convention</title>
+<meta name="description" content="settings-permissions.js only looks for a missing hook script when the command's first token itself ends in .sh/.js/.py/.mjs/.cjs. An interpreter-prefixed command like `python3 hooks/foo.py` — the exact form of Anthropic's own example hook — never gets checked at all, so a genuinely missing script produces zero warning. The opposite case is also wrong: $CLAUDE_PROJECT_DIR, the path prefix Claude Code's own docs recommend for hook commands, makes the check report a script as missing even when it exists, because the literal variable string is never expanded before the existsSync() call. Both reproduced against the real CLI.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  .meta { color: #777; font-size: 0.9rem; margin-top: 0; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; }
+  pre { background: #f4f4f4; padding: 0.9rem 1rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .cta { display: inline-block; margin-top: 0.5rem; padding: 0.6rem 1.1rem; background: #1a1a1a; color: #fff; text-decoration: none; border-radius: 6px; }
+  .cta:hover { background: #333; }
+  footer { margin-top: 3rem; color: #777; font-size: 0.9rem; }
+  a { color: #1a1a1a; }
+</style>
+</head>
+<body>
+<h1>cc-doctor's hook-script check: silent on <code>python3 foo.py</code>, false alarm on Claude Code's own <code>$CLAUDE_PROJECT_DIR</code> convention</h1>
+<p class="meta">By HiroCheck · Published 2026-09-15</p>
+
+<p>cc-doctor's <code>settings-permissions.js</code> warns when a
+<code>hooks</code> entry in <code>.claude/settings.json</code> points at a
+script that doesn't exist on disk. It does this by pattern-matching the
+first token of the hook's <code>command</code> string, then calling
+<code>existsSync()</code> on whatever it extracts. Both steps assume the
+command <em>is</em> the script path — an assumption that breaks in two
+opposite directions once you look at how hook commands are actually
+written, including in Anthropic's own example and its own documented best
+practice.</p>
+
+<h2>The check</h2>
+
+<pre><code>if (hook.type === 'command' && typeof hook.command === 'string') {
+  const scriptPathMatch = hook.command.match(/^([^\s]+\.(sh|js|py|mjs|cjs))/);
+  if (scriptPathMatch) {
+    const scriptPath = scriptPathMatch[1];
+    const resolved = scriptPath.startsWith('/')
+      ? scriptPath
+      : join(root, scriptPath);
+    if (!existsSync(resolved)) {
+      report.warn(/* ... references a script that does not exist ... */);
+    }
+  }
+}</code></pre>
+
+<p>Two things have to hold for this to work: the command's first
+whitespace-delimited token has to end in one of five extensions, and
+whatever precedes the script path in <code>join(root, scriptPath)</code>
+has to resolve to nothing so the literal string is a valid relative path.
+Neither holds for two hook-writing styles that are common enough to
+appear in Claude Code's own materials.</p>
+
+<h2>Case 1: an interpreter prefix means no check ever runs</h2>
+
+<p>Anthropic's own example hook in the <code>claude-code</code> repository
+is invoked as <code>"command": "python3 /path/to/.../bash_command_validator_example.py"</code>
+— the interpreter named first, the script as an argument. Feed cc-doctor
+that shape with the script actually missing:</p>
+
+<pre><code>{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [
+        { "type": "command", "command": "python3 hooks/block_dangerous_bash.py" }
+      ]}
+    ]
+  }
+}</code></pre>
+
+<p><code>hooks/block_dangerous_bash.py</code> does not exist anywhere in
+this repo. Running <code>checkSettingsPermissions()</code> against it:</p>
+
+<pre><code>cc-doctor: 0 error(s), 0 warning(s), 1 info.</code></pre>
+
+<p>Nothing. The regex tests the string <code>"python3
+hooks/block_dangerous_bash.py"</code> against
+<code>/^([^\s]+\.(sh|js|py|mjs|cjs))/</code>: the first token is
+<code>python3</code>, which has no matching extension, so the whole match
+fails before <code>scriptPath</code> is ever extracted. The same settings
+file with the command changed to a direct invocation —
+<code>".claude/hooks/block.sh"</code>, script equally missing — does get
+flagged:</p>
+
+<pre><code>[WARN] [warn] settings-permissions: .claude/settings.json hook for
+"PreToolUse" references a script that does not exist:
+.claude/hooks/block.sh (.claude/settings.json)</code></pre>
+
+<p>Same underlying condition — a hook command names a script that isn't
+there — two different outcomes purely because of how the command happens
+to be written. Any hook script run through <code>python3</code>,
+<code>node</code>, <code>bash</code>, or any other interpreter named
+first is invisible to this check, whether the script is present or not.</p>
+
+<h2>Case 2: Claude Code's own recommended prefix triggers a false alarm</h2>
+
+<p>Claude Code's hooks documentation recommends prefixing hook script
+paths with <code>$CLAUDE_PROJECT_DIR</code> specifically to avoid a
+different, real bug: hooks resolve relative paths against the process's
+current working directory, not the project root, so a plain relative
+path can break the moment a session's working directory isn't the
+project root. The documented fix is exactly this shape:</p>
+
+<pre><code>"command": "$CLAUDE_PROJECT_DIR/.claude/hooks/check-style.sh"</code></pre>
+
+<p>Using the <code>${...}</code> form (also valid, and the one shown in
+Claude Code's own settings examples) with a script that <strong>does</strong>
+exist on disk:</p>
+
+<pre><code>.claude/hooks/present.py   # exists, tracked in git
+
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [
+        { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/present.py" }
+      ]}
+    ]
+  }
+}</code></pre>
+
+<pre><code>[WARN] [warn] settings-permissions: .claude/settings.json hook for
+"PreToolUse" references a script that does not exist:
+${CLAUDE_PROJECT_DIR}/.claude/hooks/present.py (.claude/settings.json)</code></pre>
+
+<p>The script is right there in <code>.claude/hooks/present.py</code>, and
+cc-doctor reports it missing. This time the regex matches fine — the
+whole string ends in <code>.py</code> — but
+<code>scriptPath.startsWith('/')</code> is false (the string starts with
+<code>$</code>, not <code>/</code>), so it falls into
+<code>join(root, scriptPath)</code>, producing a path like
+<code>&lt;root&gt;/${CLAUDE_PROJECT_DIR}/.claude/hooks/present.py</code>.
+<code>${CLAUDE_PROJECT_DIR}</code> is never a real directory name on disk
+— it's a shell/Claude Code environment-variable reference meant to be
+expanded before the command runs — so <code>existsSync()</code> on that
+joined path is false by construction, for every hook written the way
+Claude Code's own docs tell you to write it.</p>
+
+<h2>Same root cause, opposite symptoms</h2>
+
+<p>Both cases come from treating <code>hook.command</code> as if it were
+always literally a filesystem path, with no notion of an interpreter
+prefix or of shell/environment-variable expansion. One direction makes
+the check silent when it should warn (interpreter-prefixed commands, a
+missing script produces nothing). The other makes it warn when it
+shouldn't (<code>$CLAUDE_PROJECT_DIR</code>-prefixed commands, a present
+script gets flagged as absent). A team that follows Claude Code's own
+best-practice advice and prefixes its hook paths with
+<code>$CLAUDE_PROJECT_DIR</code> will see a permanent, unfixable-by-them
+warning from cc-doctor on every scan — which is the kind of noise that
+tends to end with the warning being ignored altogether, including the
+next time it's right.</p>
+
+<h2>What cc-doctor checks</h2>
+
+<p><a href="https://www.npmjs.com/package/cc-doctor">cc-doctor</a> is a
+free CLI that scans a repo's git-tracked files for hardcoded secrets,
+plus Claude Code-specific misconfigurations: an unscoped
+<code>Bash(*)</code> permission grant, a committed
+<code>settings.local.json</code>, hooks pointing at scripts that no
+longer exist, and hardcoded credentials in <code>.mcp.json</code>. It
+runs entirely against the local filesystem and git index — no network
+access, no API key required.</p>
+
+<pre><code>npx cc-doctor            # scan the current directory
+npx cc-doctor path/to/repo</code></pre>
+
+<p>Measured against cc-doctor's 49-fixture accuracy corpus, the tool's
+recall is 100% (29/29 known-bad fixtures) with a 0% false-positive rate
+(0/20 known-clean fixtures) — full methodology in the
+<a href="../cc-doctor.html">project README</a>. The corpus's only
+hook-related fixtures use a direct <code>.sh</code> path, one missing and
+one present; neither an interpreter-prefixed command nor a
+<code>$CLAUDE_PROJECT_DIR</code>-prefixed command appears in either
+fixture set, so this gap moves neither number — it's a blind spot the
+corpus was never built to catch, not a regression. Nothing in this
+article changes cc-doctor's code; both reproductions above were run
+against the unmodified CLI.</p>
+
+<p><a class="cta" href="../cc-doctor.html">cc-doctor — install &amp; docs →</a></p>
+
+<footer>
+  <p>By HiroCheck. cc-doctor is MIT licensed. See also
+  <a href="https://github.com/Hiro-012/cc-doctor">cc-doctor on GitHub</a>
+  and <a href="./index.html">more posts</a>. Sources:
+  <a href="https://github.com/anthropics/claude-code/blob/main/examples/hooks/bash_command_validator_example.py">Anthropic's own example PreToolUse hook</a>
+  (invoked as <code>python3 /path/to/.../bash_command_validator_example.py</code>),
+  and
+  <a href="https://code.claude.com/docs/en/hooks">Claude Code hooks reference documentation</a>
+  (hooks resolve relative paths against the process working directory, not
+  the project root, and recommend <code>$CLAUDE_PROJECT_DIR</code>-prefixed
+  absolute paths for exactly that reason).</p>
+</footer>
+</body>
+</html>

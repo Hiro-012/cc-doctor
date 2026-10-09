@@ -1,9 +1,9 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>cc-doctor blog — notes on Claude Code config security</title>
-<meta name="description" content="Technical notes from HiroCheck on Claude Code configuration security — the issues cc-doctor catches, and why they matter.">
+<title>cc-doctor blog &mdash; notes on Claude Code config &amp; secret hygiene</title>
+<meta name="description" content="Technical notes from HiroCheck on Claude Code configuration and secret-exposure mistakes &mdash; the issues cc-doctor catches, and why they matter.">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
@@ -18,10 +18,74 @@
 </head>
 <body>
 <h1>cc-doctor blog</h1>
-<p class="tagline">Notes on the Claude Code config security issues cc-doctor catches, and why they matter.</p>
+<p class="tagline">Notes on the Claude Code config and secret-exposure issues cc-doctor catches, and why they matter.</p>
 <div class="post">
   <h2><a href="./claude-code-mcp-json-hardcoded-secrets.html">Two Claude Code config mistakes that leak secrets or grant too much</a></h2>
-  <p>A hardcoded token in .mcp.json and an unrestricted Bash(*) permission grant — both common, both accidental, both checkable in one CLI run.</p>
+  <p>Why a hardcoded Authorization header in .mcp.json and an unrestricted Bash(*) permission in .claude/settings.json are both common, both easy to make by accident, and both checkable in one CLI run.</p>
+</div>
+<div class="post">
+  <h2><a href="./claude-code-settings-local-json-committed-to-git.html">settings.local.json is supposed to stay local — what happens when it gets committed</a></h2>
+  <p>Claude Code&#x27;s own convention keeps .claude/settings.local.json out of git for a reason: it holds one contributor&#x27;s personal permission grants and local paths. Here&#x27;s what leaks when that convention breaks, and a second check for hooks pointing at scripts that no longer exist.</p>
+</div>
+<div class="post">
+  <h2><a href="./claude-code-secret-still-in-git-history-after-deleting.html">Deleting the line doesn&#x27;t rotate the key — what &quot;remove it from git history&quot; actually means</a></h2>
+  <p>cc-doctor&#x27;s secrets-scan check reads git-tracked files as they exist right now, not the commits that came before. Here&#x27;s the gap that leaves open, why cc-doctor&#x27;s own warning tells you to do two separate things, and what actually gets a secret out of history.</p>
+</div>
+<div class="post">
+  <h2><a href="./claude-md-secret-scan-narrower-than-tracked-files-scan.html">CLAUDE.md gets read into every session — cc-doctor&#x27;s check on it only catches 3 shapes of secret</a></h2>
+  <p>CLAUDE.md is merged into every Claude Code session automatically, including a global copy outside any repo. cc-doctor&#x27;s claude-md check only flags PGP blocks, private-key headers, and AWS access key IDs in the project-root file — here&#x27;s what that leaves uncovered, and why it mostly doesn&#x27;t matter for the tracked-file case.</p>
+</div>
+<div class="post">
+  <h2><a href="./settings-json-dangerous-bash-pattern-list-gaps.html">cc-doctor flags Bash(git push --force) in settings.json — not Bash(git push -f) or Bash(git reset --hard)</a></h2>
+  <p>cc-doctor&#x27;s settings-permissions check flags six specific shapes of risky Bash allow-rule in .claude/settings.json. git push -f (the short flag for --force), git reset --hard, and chmod -R 777 are just as destructive but aren&#x27;t among the six — verified by running the check against each rule directly.</p>
+</div>
+<div class="post">
+  <h2><a href="./settings-json-hook-missing-script-fails-open.html">A Claude Code hook with a mistyped script path doesn&#x27;t block anything — it fails open, silently</a></h2>
+  <p>Claude Code&#x27;s own docs say a hook command that can&#x27;t start (missing or non-executable script) fails open: the tool call proceeds, and the error goes to the debug log only, never the transcript. cc-doctor&#x27;s settings-permissions check catches this by testing the referenced path exists — verified by reproducing the exact failure and running the check against it.</p>
+</div>
+<div class="post">
+  <h2><a href="./settings-json-bash-star-no-deny-check-is-redundant.html">cc-doctor has two checks for Bash(*) in settings.json — one of them can never fire on its own</a></h2>
+  <p>settings-permissions.js flags an unscoped Bash(*) allow rule twice: once unconditionally, once only when deny is empty. The second condition is a strict subset of the first, so it can never produce a finding the first one hasn&#x27;t already produced for the same rule — verified by tracing both conditions and reproducing all three deny-list states.</p>
+</div>
+<div class="post">
+  <h2><a href="./stripe-gitlab-npm-tokens-not-in-secret-pattern-list.html">A Stripe live key hardcoded in .mcp.json slips past every one of cc-doctor&#x27;s secret checks</a></h2>
+  <p>mcp-config.js&#x27;s hardcoded-secret regex only recognizes four providers&#x27; key formats (OpenAI/Anthropic, GitHub, AWS, Slack). Stripe (sk_live_/rk_live_), GitLab (glpat-) and npm (npm_) tokens don&#x27;t match any of them — and secrets-scan.js&#x27;s generic fallback pattern, meant to backstop exactly this gap, doesn&#x27;t match standard JSON key syntax either. Verified by running both checks against real-shaped (fake) values.</p>
+</div>
+<div class="post">
+  <h2><a href="./dotenv-unquoted-secrets-bypass-generic-pattern.html">A committed .env file with a plainly-named password in it produces zero findings from cc-doctor</a></h2>
+  <p>secrets-scan.js&#x27;s generic fallback pattern requires the assigned value to be wrapped in quotes. Standard .env syntax (KEY=value, no quotes) is the one place that requirement can never be met, so any secret whose format isn&#x27;t already one of the five named patterns evades detection entirely, however the key is named. Verified by committing a two-line .env file and running the real CLI against it.</p>
+</div>
+<div class="post">
+  <h2><a href="./hook-script-check-interpreter-prefix-and-claude-project-dir.html">cc-doctor&#x27;s hook-script check: silent on &quot;python3 foo.py&quot;, false alarm on Claude Code&#x27;s own $CLAUDE_PROJECT_DIR convention</a></h2>
+  <p>settings-permissions.js only looks for a missing hook script when the command&#x27;s first token itself ends in .sh/.js/.py/.mjs/.cjs. An interpreter-prefixed command like `python3 hooks/foo.py` — the exact form of Anthropic&#x27;s own example hook — never gets checked at all, so a genuinely missing script produces zero warning. The opposite case is also wrong: $CLAUDE_PROJECT_DIR, the path prefix Claude Code&#x27;s own docs recommend for hook commands, makes the check report a script as missing even when it exists, because the literal variable string is never expanded before the existsSync() call. Both reproduced against the real CLI.</p>
+</div>
+<div class="post">
+  <h2><a href="./mcp-json-args-field-secrets-invisible.html">cc-doctor&#x27;s .mcp.json secret check never looks at &quot;args&quot; — the exact field Context7&#x27;s own docs tell you to put your API key in</a></h2>
+  <p>mcp-config.js&#x27;s hardcoded-secret scan reads server.env and server.headers. It never reads server.args — the field Upstash&#x27;s own Context7 MCP quickstart tells users to pass --api-key in. A GitHub-token-shaped secret placed there is caught only by the unrelated whole-file backstop; a real Context7 key format is caught by nothing at all. Verified by running the unmodified CLI against both placements.</p>
+</div>
+<div class="post">
+  <h2><a href="./settings-json-bare-bash-allow-rule-not-detected.html">cc-doctor flags &quot;Bash(*)&quot; in settings.json — not bare &quot;Bash&quot;, which Claude Code&#x27;s own docs say grants the same unrestricted access</a></h2>
+  <p>cc-doctor&#x27;s settings-permissions check looks for the literal string Bash(*) in permissions.allow. Claude Code&#x27;s own permissions documentation describes a bare Bash entry (no parentheses) as an equivalent unscoped grant — recommended, even, as the way to allow all Bash commands without prompts. cc-doctor produces zero findings against it. Verified against the unmodified CLI.</p>
+</div>
+<div class="post">
+  <h2><a href="./settings-json-curl-pipe-bash-not-sh-bypasses-dangerous-pattern.html">cc-doctor flags &quot;Bash(curl ... | sh)&quot; in settings.json — not &quot;| bash)&quot;, the far more common install-script idiom</a></h2>
+  <p>cc-doctor&#x27;s dangerous-Bash-pattern regex for curl-pipe-to-shell is anchored to the literal interpreter name \&quot;sh\&quot;: /^Bash(curl.*\|\s*sh\)/. \&quot;Bash(curl ... | bash)\&quot; and \&quot;Bash(curl ... | zsh)\&quot; — the actual install-script one-liners most projects publish — don&#x27;t match. Verified side by side against the unmodified CLI.</p>
+</div>
+<div class="post">
+  <h2><a href="./cc-doctor-secrets-scan-skips-files-over-1mb.html">cc-doctor&#x27;s secret scan silently skips any tracked file over 1MB — no pattern check runs on it at all</a></h2>
+  <p>secrets-scan.js&#x27;s MAX_FILE_BYTES guard discards a file before any of the five named patterns or the generic fallback ever run against it. A committed bundle, minified asset, or data dump just over 1MB with a literal secret produces zero findings; the identical content trimmed under the limit is correctly flagged. Verified against the unmodified CLI.</p>
+</div>
+<div class="post">
+  <h2><a href="./cc-doctor-dangerous-bash-patterns-only-check-the-first-command.html">cc-doctor&#x27;s dangerous-Bash-pattern list only looks at the first command in an allow rule — chain anything in front and it goes quiet</a></h2>
+  <p>Four of the six regexes in settings-permissions.js&#x27;s DANGEROUS_BASH_PATTERNS array (rm -rf, git push --force, sudo, curl ... | sh) are anchored to the start of the Bash(...) string. Bash(sudo rm -rf /) is flagged; Bash(cd /tmp &amp;&amp; sudo rm -rf /) and Bash(echo ok; curl ... | sh) are not — same destructive command, one extra shell operator in front. Verified against the unmodified CLI.</p>
+</div>
+<div class="post">
+  <h2><a href="./cc-doctor-github-fine-grained-pat-not-recognized.html">cc-doctor&#x27;s GitHub-token detection only knows the old ghp_ format — GitHub&#x27;s own recommended fine-grained PATs are invisible</a></h2>
+  <p>Both of cc-doctor&#x27;s GitHub-token checks (mcp-config.js&#x27;s hardcoded-secret scan and secrets-scan.js&#x27;s named pattern) match only the legacy ghp_ classic PAT. A github_pat_-prefixed fine-grained token — the format GitHub&#x27;s own UI has recommended by default for years — hardcoded in .mcp.json&#x27;s env block produces zero output, while the identical classic-format token is caught immediately. Verified against the unmodified CLI.</p>
+</div>
+<div class="post">
+  <h2><a href="./cc-doctor-hook-command-dangerous-bash-pattern-not-checked.html">cc-doctor&#x27;s dangerous-Bash-pattern check never runs on hook commands — only on permissions.allow rules</a></h2>
+  <p>DANGEROUS_BASH_PATTERNS (rm -rf, git push --force, sudo, curl | sh, --dangerously-skip-permissions) is applied to every string in permissions.allow, but settings-permissions.js&#x27;s hook loop never calls it at all — a hook&#x27;s command is only ever checked for whether a referenced script file exists. A PreToolUse hook whose command is literally rm -rf / produces zero findings; the identical string as an allow rule is flagged immediately. Verified against the unmodified CLI.</p>
 </div>
 <footer>
   <p>By HiroCheck. See also <a href="../index.html">cc-doctor</a>.</p>

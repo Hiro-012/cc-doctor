@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cc-doctor flags "Bash(curl ... | sh)" in settings.json — not "| bash)", the far more common install-script idiom — cc-doctor</title>
+<meta name="description" content="cc-doctor's dangerous-Bash-pattern regex for curl-pipe-to-shell is anchored to the literal interpreter name \"sh\": /^Bash(curl.*\|\s*sh\)/. \"Bash(curl ... | bash)\" and \"Bash(curl ... | zsh)\" — the actual install-script one-liners most projects publish — don't match. Verified side by side against the unmodified CLI.">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
+  .meta { color: #777; font-size: 0.9rem; margin-top: 0; }
+  h2 { font-size: 1.2rem; margin-top: 2rem; }
+  pre { background: #f4f4f4; padding: 0.9rem 1rem; border-radius: 6px; overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .cta { display: inline-block; margin-top: 0.5rem; padding: 0.6rem 1.1rem; background: #1a1a1a; color: #fff; text-decoration: none; border-radius: 6px; }
+  .cta:hover { background: #333; }
+  footer { margin-top: 3rem; color: #777; font-size: 0.9rem; }
+  a { color: #1a1a1a; }
+</style>
+</head>
+<body>
+<h1>cc-doctor flags <code>Bash(curl ... | sh)</code> in settings.json — not <code>| bash)</code>, the far more common install-script idiom</h1>
+<p class="meta">By HiroCheck · Published 2026-09-22</p>
+
+<p>Among the six fixed patterns <code>lib/checks/settings-permissions.js</code>
+checks every Bash allow-rule against (covered in an earlier post on this
+blog), one is meant to catch the classic "download a script and run it as
+root" idiom:</p>
+
+<pre><code>/^Bash\(curl.*\|\s*sh\)/</code></pre>
+
+<p>Read literally, this matches an allow rule that ends in a pipe to
+<code>sh)</code>, with any amount of whitespace after the pipe. It does not
+match a pipe to anything else. And the interpreter named in that regex,
+plain <code>sh</code>, is the less common half of this idiom in practice —
+most published install one-liners (nvm, rustup, Homebrew's own installer
+historically, countless others) say <code>| bash</code>, not
+<code>| sh</code>, specifically because they rely on Bash-only syntax the
+POSIX <code>sh</code> the pattern checks for isn't guaranteed to support.</p>
+
+<h2>Verified directly, side by side</h2>
+
+<p>Two otherwise-identical <code>.claude/settings.json</code> files,
+differing only in the interpreter named after the pipe, scanned by the
+unmodified CLI:</p>
+
+<pre><code>// piped-sh/.claude/settings.json
+{ "permissions": {
+    "allow": ["Bash(curl https://example.com/install.sh | sh)"],
+    "deny": ["Bash(rm -rf /)"] } }
+
+// piped-bash/.claude/settings.json
+{ "permissions": {
+    "allow": ["Bash(curl https://example.com/install.sh | bash)"],
+    "deny": ["Bash(rm -rf /)"] } }</code></pre>
+
+<pre><code>$ cc-doctor piped-sh
+[ERROR] settings-permissions: .claude/settings.json allows a high-risk
+  command pattern: "Bash(curl https://example.com/install.sh | sh)"
+cc-doctor: 1 error(s), 0 warning(s), 1 info.
+$ echo $?
+1
+
+$ cc-doctor piped-bash
+cc-doctor: 0 error(s), 0 warning(s), 1 info.
+$ echo $?
+0</code></pre>
+
+<p>A third variant piping to <code>zsh</code> instead produces the same
+clean exit as <code>bash</code>. All three grant Claude Code the identical
+thing — permission to fetch and immediately execute a remote script,
+unreviewed, without a prompt — and cc-doctor's own README lists this exact
+pattern ("curl-pipe-to-shell install scripts") as one of the six shapes it
+claims to catch. It catches one of the (at least) three interpreter names
+that idiom is actually written with.</p>
+
+<h2>Why the regex, not just the interpreter list, is the actual gap</h2>
+
+<p>The fix isn't "add <code>bash</code> and <code>zsh</code> as two more
+literals" — that just narrows the miss to the next interpreter someone
+writes (<code>dash</code>, <code>ksh</code>, a full path like
+<code>/bin/bash</code>). The pattern is checking for a specific word
+immediately before the closing parenthesis when what it actually wants to
+know is "does this rule pipe a <code>curl</code> response into some shell
+interpreter at all" — which is answerable without naming any interpreter,
+e.g. matching a pipe into any single bare word (no flags, no further
+pipeline) preceding the closing paren. As written, the regex is
+interpreter-enumerable, and the one interpreter it enumerates is not the
+one most real install scripts use.</p>
+
+<h2>What cc-doctor checks</h2>
+
+<p><a href="https://www.npmjs.com/package/cc-doctor">cc-doctor</a> is a
+free CLI that scans a repo's git-tracked files for hardcoded secrets, plus
+Claude Code-specific misconfigurations: risky Bash allow-rules, a
+committed <code>settings.local.json</code>, hooks pointing at scripts
+that no longer exist, and hardcoded credentials in <code>.mcp.json</code>.
+It runs entirely against the local filesystem and git index — no network
+access, no API key required.</p>
+
+<pre><code>npx cc-doctor            # scan the current directory
+npx cc-doctor path/to/repo</code></pre>
+
+<p>Measured against cc-doctor's accuracy corpus, the tool's recall is
+100.0% (29/29) with a 0.0% false-positive rate (0/20) — full methodology
+in the <a href="../cc-doctor.html">project README</a>. That corpus doesn't
+include a <code>curl | bash</code>-style fixture, so this gap doesn't
+change those numbers; it's a real miss the existing corpus simply doesn't
+exercise.</p>
+
+<p><a class="cta" href="../cc-doctor.html">cc-doctor — install &amp; docs →</a></p>
+
+<footer>
+  <p>By HiroCheck. cc-doctor is MIT licensed. See also
+  <a href="https://github.com/Hiro-012/cc-doctor">cc-doctor on GitHub</a>,
+  the related post on <a href="./settings-json-dangerous-bash-pattern-list-gaps.html">dangerous
+  Bash pattern list gaps</a>, and <a href="./index.html">more posts</a>.</p>
+</footer>
+</body>
+</html>
